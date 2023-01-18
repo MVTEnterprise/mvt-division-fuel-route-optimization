@@ -1,8 +1,10 @@
-import '@/styles/globals.css'
-import type { AppProps } from 'next/app'
+import '@/styles/globals.css';
+import 'azure-maps-control/dist/atlas.min.css';
 
-const  App = ({ Component, pageProps }: AppProps) => {
-  return <Component {...pageProps} />
-}
+import type { AppProps } from 'next/app';
+
+const App = ({ Component, pageProps }: AppProps) => {
+  return <Component {...pageProps} />;
+};
 
 export default App;
