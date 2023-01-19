@@ -1,122 +1,221 @@
-// @ts-nocheck
 // Dispatch and order number
-import { useEffect } from 'react';
+import { useEffect, useState, useRef } from 'react';
+import dynamic from 'next/dynamic';
+import axios from 'axios';
 
-let atlas = null;
-let atlas2 = null;
+type azureMapControlImport = typeof import('azure-maps-control');
+type AzureMapRestImport = typeof import('azure-maps-rest');
+
+type MapInstance = import('azure-maps-control').Map;
+type AzureMapDataSource = import('azure-maps-control').source.DataSource;
+type MapPopup = import('azure-maps-control').Popup;
+
+let azureMapsControl: azureMapControlImport | null = null;
+let azureMapsRest: AzureMapRestImport | null = null;
 
 const Home = () => {
+  const mapInstance = useRef<MapInstance | null>(null);
+  const mapElementReference = useRef<HTMLDivElement | null>(null);
+  const mapDatasource = useRef<AzureMapDataSource | null>(null);
+  const mapPopups = useRef<Array<MapPopup>>([]);
+  const [isMapReferenceVisible, setIsMapReferenceVisible] = useState(false);
+
+  const getFuelSolution = async () => {
+    interface FuelSolutionResponse {
+      FuelSolution: {
+        Destination: {
+          StopCode: string;
+          Latitude: number;
+          Longitude: number;
+        };
+        Origin: {
+          StopCode: string;
+          Latitude: number;
+          Longitude: number;
+        };
+        FuelRoute: Array<{
+          StationId: string;
+          Address: string;
+          Latitude: number;
+          Longitude: number;
+          RefuelAmount: number;
+        }>;
+      };
+      Message: string | null;
+      Success: boolean;
+    }
+
+    let { data: fuelSolutionResponse } = await axios.post<FuelSolutionResponse>(
+      'https://devmvtapi.azurewebsites.net/api/fuelSolution?code=3odXM83jcj28XotLRq1MrqoyxU3y1UtZmABMEsvxheBuAzFuVdjjJw==',
+      {
+        DispatchKey: 2,
+      }
+    );
+
+    fuelSolutionResponse.FuelSolution.Origin.Latitude = 31.7619;
+    fuelSolutionResponse.FuelSolution.Origin.Longitude = -106.485;
+
+    fuelSolutionResponse.FuelSolution.Destination.Latitude = 33.9569444;
+    fuelSolutionResponse.FuelSolution.Destination.Longitude = -118.0661111;
+
+    fuelSolutionResponse.FuelSolution.FuelRoute = [
+      { StationId: '1', Address: 'Address one', Latitude: 31.327761, Longitude: -109.546883, RefuelAmount: 100 },
+      { StationId: '2', Address: 'Address two', Latitude: 31.32568, Longitude: -110.945778, RefuelAmount: 75 },
+    ];
+
+    if (azureMapsControl === null) throw Error('Azure maps control paackage not imported');
+
+    if (azureMapsRest === null) throw Error('Azure maps rest package not imported');
+
+    if (mapInstance.current === null) throw Error('Map instance not created');
+
+    mapPopups.current.forEach((popup) => popup.remove());
+    mapDatasource.current = null;
+
+    //Wait until the map resources are ready.
+    mapInstance.current!.events.add('ready', () => {
+      //Create a data source and add it to the map.
+      mapDatasource.current = new azureMapsControl!.source.DataSource();
+      mapInstance.current!.sources.add(mapDatasource.current);
+
+      //Add a layer for rendering the route lines and have it render under the map labels.
+      mapInstance.current!.layers.add(
+        new azureMapsControl!.layer.LineLayer(mapDatasource.current, undefined, {
+          strokeColor: '#2272B9',
+          strokeWidth: 5,
+          lineJoin: 'round',
+          lineCap: 'round',
+        }),
+        'labels'
+      );
+
+      //Add a layer for rendering point data.
+      mapInstance.current!.layers.add(
+        new azureMapsControl!.layer.SymbolLayer(mapDatasource.current, undefined, {
+          iconOptions: {
+            image: ['get', 'icon'],
+            allowOverlap: true,
+          },
+          textOptions: {
+            textField: ['get', 'title'],
+            offset: [0, 1.2],
+          },
+          filter: ['any', ['==', ['geometry-type'], 'Point'], ['==', ['geometry-type'], 'MultiPoint']], //Only render Point or MultiPoints in this layer.
+        })
+      );
+
+      //Create the GeoJSON objects which represent the start and end points of the route.
+      var startPoint = new azureMapsControl!.data.Feature(
+        new azureMapsControl!.data.Point([
+          fuelSolutionResponse.FuelSolution.Origin.Longitude,
+          fuelSolutionResponse.FuelSolution.Origin.Latitude,
+        ]),
+        {
+          title: fuelSolutionResponse.FuelSolution.Origin.StopCode,
+          icon: 'pin-round-blue',
+        }
+      );
+
+      var endPoint = new azureMapsControl!.data.Feature(
+        new azureMapsControl!.data.Point([
+          fuelSolutionResponse.FuelSolution.Destination.Longitude,
+          fuelSolutionResponse.FuelSolution.Destination.Latitude,
+        ]),
+        {
+          title: fuelSolutionResponse.FuelSolution.Destination.StopCode,
+          icon: 'pin-blue',
+        }
+      );
+
+      // My comment - loop and create waypoints
+      const wayPoints = fuelSolutionResponse.FuelSolution.FuelRoute.map((fuelStop) => {
+        // Waypoint
+        return new azureMapsControl!.data.Feature(
+          new azureMapsControl!.data.Point([fuelStop.Longitude, fuelStop.Latitude]),
+          {
+            title: fuelStop.Address,
+            icon: 'pin-red',
+          }
+        );
+      });
+
+      //Add the data to the data source.
+      mapDatasource.current.add([startPoint, ...wayPoints, endPoint]);
+
+      mapInstance.current!.setCamera({
+        bounds: azureMapsControl!.data.BoundingBox.fromData([startPoint, endPoint]),
+        padding: 80,
+      });
+
+      //Use MapControlCredential to share authentication between a map control and the service module.
+      var pipeline = azureMapsRest!.MapsURL.newPipeline(new azureMapsRest!.MapControlCredential(mapInstance.current!));
+
+      //Construct the RouteURL object
+      var routeURL = new azureMapsRest!.RouteURL(pipeline);
+
+      //Start and end point input to the routeURL
+
+      var coordinates = [
+        [startPoint.geometry.coordinates[0], startPoint.geometry.coordinates[1]],
+        ...wayPoints.map((wayPoint) => [wayPoint.geometry.coordinates[0], wayPoint.geometry.coordinates[1]]),
+        [endPoint.geometry.coordinates[0], endPoint.geometry.coordinates[1]],
+      ];
+
+      //Make a search route request
+      routeURL.calculateRouteDirections(azureMapsRest!.Aborter.timeout(10000), coordinates).then((directions) => {
+        //Get data features from response
+        var data = directions.geojson.getFeatures();
+        mapDatasource.current!.add(data);
+      });
+
+      mapPopups.current = fuelSolutionResponse.FuelSolution.FuelRoute.map((fuelStop) => {
+        return new azureMapsControl!.Popup({
+          pixelOffset: [0, -18],
+          closeButton: false,
+          position: [fuelStop.Longitude, fuelStop.Latitude],
+          content: '<div style="padding:10px;color:white" class="bg-red-500 z-10">Hello World</div>',
+        });
+      });
+
+      mapPopups.current.forEach((popup) => popup.open(mapInstance.current!));
+    });
+  };
+
   useEffect(() => {
-    let map = null;
-    let datasource = null;
-    let client = null;
+    if (!isMapReferenceVisible) return;
 
-    (async () => {
-      atlas = await import('azure-maps-control');
-      atlas2 = await import('azure-maps-rest');
+    const mapReferenceElementCopy = mapElementReference.current;
 
-      map = new atlas.Map('myMap', {
+    const initializeAzureMapsControl = async () => {
+      azureMapsControl = await import('azure-maps-control');
+    };
+
+    const initializeAzureMapsRest = async () => {
+      azureMapsRest = await import('azure-maps-rest');
+    };
+
+    const initializeAzureResources = async () => {
+      azureMapsControl === null && (await initializeAzureMapsControl());
+      azureMapsRest === null && (await initializeAzureMapsRest());
+
+      if (azureMapsControl === null) throw Error('Azure maps control not imported');
+
+      mapInstance.current = new azureMapsControl.Map('myMap', {
         language: 'en-US',
         authOptions: {
-          authType: atlas.AuthenticationType.subscriptionKey,
+          authType: azureMapsControl.AuthenticationType.subscriptionKey,
           subscriptionKey: 'nd0VsJULUxna4HRXZFfUSrvcuAdGZ6Fcgo4brYmOPrI',
         },
       });
+    };
 
-      // ! TESTING
-      //Wait until the map resources are ready.
-      map.events.add('ready', () => {
-        //Create a data source and add it to the map.
-        datasource = new atlas.source.DataSource();
-        map.sources.add(datasource);
-
-        console.log(atlas);
-        console.log(atlas2);
-        console.log(map);
-        console.log(datasource);
-
-        //Add a layer for rendering the route lines and have it render under the map labels.
-        map.layers.add(
-          new atlas.layer.LineLayer(datasource, null, {
-            strokeColor: '#2272B9',
-            strokeWidth: 5,
-            lineJoin: 'round',
-            lineCap: 'round',
-          }),
-          'labels'
-        );
-
-        //Add a layer for rendering point data.
-        map.layers.add(
-          new atlas.layer.SymbolLayer(datasource, null, {
-            iconOptions: {
-              image: ['get', 'icon'],
-              allowOverlap: true,
-            },
-            textOptions: {
-              textField: ['get', 'title'],
-              offset: [0, 1.2],
-            },
-            filter: ['any', ['==', ['geometry-type'], 'Point'], ['==', ['geometry-type'], 'MultiPoint']], //Only render Point or MultiPoints in this layer.
-          })
-        );
-
-        //Create the GeoJSON objects which represent the start and end points of the route.
-        var startPoint = new atlas.data.Feature(new atlas.data.Point([-122.130137, 47.644702]), {
-          title: 'Redmond',
-          icon: 'pin-blue',
-        });
-
-        var endPoint = new atlas.data.Feature(new atlas.data.Point([-122.3352, 47.61397]), {
-          title: 'Seattle',
-          icon: 'pin-round-blue',
-        });
-
-        //Add the data to the data source.
-        datasource.add([startPoint, endPoint]);
-
-        map.setCamera({
-          bounds: atlas.data.BoundingBox.fromData([startPoint, endPoint]),
-          padding: 80,
-        });
-
-        // console.log('RETYR POLICY TYPE', atlas2.RetryPolicyType);
-        //Use MapControlCredential to share authentication between a map control and the service module.
-        var pipeline = atlas2.MapsURL.newPipeline(new atlas2.MapControlCredential(map));
-
-        //Construct the RouteURL object
-        var routeURL = new atlas2.RouteURL(pipeline);
-
-        console.log('routeURL', routeURL);
-
-        //Start and end point input to the routeURL
-        const testPoint = new atlas.data.Feature(new atlas.data.Point([-122.341515, 47.755653]), {
-          title: 'Test',
-          icon: 'pin-blue',
-          visible: true,
-        });
-        var coordinates = [
-          [startPoint.geometry.coordinates[0], startPoint.geometry.coordinates[1]],
-          [testPoint.geometry.coordinates[0], testPoint.geometry.coordinates[1]],
-          [endPoint.geometry.coordinates[0], endPoint.geometry.coordinates[1]],
-        ];
-
-        //Make a search route request
-        routeURL.calculateRouteDirections(atlas2.Aborter.timeout(10000), coordinates).then((directions) => {
-          //Get data features from response
-          var data = directions.geojson.getFeatures();
-          datasource.add(data);
-
-          console.log('Datasource', data);
-        });
-      });
-      // ! END TESTING
-    })();
+    initializeAzureResources();
 
     return () => {
-      map = null;
+      mapPopups.current.forEach((popup) => popup.remove());
+      mapReferenceElementCopy!.innerHTML = '';
     };
-  }, []);
+  }, [isMapReferenceVisible]);
 
   return (
     <div className="m-16">
@@ -145,9 +244,19 @@ const Home = () => {
           />
         </div>
 
-        <button className="bg-slate-800 text-white px-8 py-2.5 text-sm rounded">Search</button>
+        <button className="bg-slate-800 text-white px-8 py-2.5 text-sm rounded" onClick={getFuelSolution}>
+          Search
+        </button>
       </div>
-      <div id="myMap" className="h-[800px] rounded"></div>
+
+      <div
+        ref={(el) => {
+          mapElementReference.current = el;
+          setIsMapReferenceVisible(true);
+        }}
+        id="myMap"
+        className="h-[800px] rounded"
+      ></div>
     </div>
   );
 };
