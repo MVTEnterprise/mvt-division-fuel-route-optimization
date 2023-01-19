@@ -173,7 +173,11 @@ const Home = () => {
           pixelOffset: [0, -18],
           closeButton: false,
           position: [fuelStop.Longitude, fuelStop.Latitude],
-          content: '<div style="padding:10px;color:white" class="bg-red-500 z-10">Hello World</div>',
+          content: `
+            <div class="bg-red-500 rounded px-3 py-2"> 
+              <div class="text-white font-bold text-sm">Purchase ${fuelStop.RefuelAmount} gallons</div> 
+            </div>
+          `,
         });
       });
 
@@ -244,8 +248,8 @@ const Home = () => {
           />
         </div>
 
-        <button className="bg-slate-800 text-white px-8 py-2.5 text-sm rounded" onClick={getFuelSolution}>
-          Search
+        <button className="bg-slate-800 text-white font-medium px-8 py-2.5 text-sm rounded" onClick={getFuelSolution}>
+          Optimize ⛽
         </button>
       </div>
 
